@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"flag"
@@ -16,13 +17,14 @@ import (
 )
 
 var (
-	redis_server   *string
-	redis_password *string
-	redis_key      *string
-
+	redis_server      *string
+	redis_password    *string
+	redis_key         *string
 	index_file        *string
 	idlen             *uint
 	import_file       *string
+	watermark_low     *int
+	generate_number   *int
 	redis_client      *redis.Client
 	bfilter           *bloom.BloomFilter
 	bfilter_header    *index_file_header
@@ -30,17 +32,16 @@ var (
 )
 
 const (
-	default_id_len  = 20
-	interval        = 1 //redis监测间隔
-	watermark_low   = 100
-	generate_number = 10
-	generate_step   = 3
+	default_id_len = 20
+	interval       = 1 //redis监测间隔
+	generate_step  = 100
 )
 
 func main() {
-	flag.Parse()
-	command := flag.Arg(0)
+	command := os.Args[1]
+	os.Args = os.Args[1:]
 	parse_arg(command)
+	flag.Parse()
 
 	switch command {
 	case "start":
@@ -98,9 +99,9 @@ func watchloop() {
 	for {
 		llen := redis_client.LLen(*redis_key)
 		if llen.Err() == nil {
-			if llen.Val() < watermark_low {
-				log.Printf("count(\"%s\")=%d < %d, generate %d ids\n", *redis_key, llen.Val(), watermark_low, generate_number)
-				generate_id_list(*redis_key, *idlen, generate_number)
+			if int(llen.Val()) < *watermark_low {
+				log.Printf("count(\"%s\")=%d < %d, generate %d ids\n", *redis_key, llen.Val(), *watermark_low, *generate_number)
+				generate_id_list(*redis_key, *idlen, *generate_number)
 			} else {
 				if is_index_not_sync {
 					write_index_file()
@@ -239,18 +240,21 @@ func is_in_bloomfilter(test string) bool {
 func parse_arg(command string) {
 	switch command {
 	case "import", "has":
-		index_file = flag.String("index", "guid.idx", "bloomfilter index file")
+		index_file = flag.String("i", "guid.idx", "bloomfilter index file")
 	case "top", "clear-redis", "start":
-		redis_server = flag.String("redis", "127.0.0.1:6379", "redis server address")
-		redis_password = flag.String("password", "", "redis password")
-		redis_key = flag.String("key", "guid-"+strconv.Itoa(default_id_len), "redis id-key")
+		redis_server = flag.String("s", "127.0.0.1:6379", "redis server address")
+		redis_password = flag.String("p", "", "redis password")
+		redis_key = flag.String("k", "guid-"+strconv.Itoa(default_id_len), "redis id-key")
 	}
 
 	if command == "start" {
-		idlen = flag.Uint("idlen", default_id_len, "id length.")
-		index_file = flag.String("index", "guid.idx", "bloomfilter index file")
+		idlen = flag.Uint("l", default_id_len, "id length.")
+		index_file = flag.String("i", "guid.idx", "bloomfilter index file")
+
+		watermark_low = flag.Int("m", 50000, "list length watermark.")
+		generate_number = flag.Int("n", 10000, "id numbers per generate action.")
 	} else if command == "import" {
-		import_file = flag.String("file", "", "file to import")
+		import_file = flag.String("f", "", "file to import")
 	}
 }
 
@@ -284,6 +288,17 @@ func do_top() {
 
 func do_import() {
 	load_filter()
+	fd, err := os.OpenFile(*import_file, os.O_RDONLY, 0644)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	rd := bufio.NewReader(fd)
+	var line []byte
+	for ; err == nil; line, _, err = rd.ReadLine() {
+		bfilter.Add(line)
+	}
+	write_index_file()
 }
 
 func do_clear_redis() {

@@ -30,6 +30,8 @@ More: guid help <command>
 ```
 ./guid start <options>
 options:
+  -generate_number int
+    	id numbers per generate action. (default 10000)
   -idlen uint
     	id length. (default 20)
   -index string
@@ -40,6 +42,8 @@ options:
     	redis password
   -redis string
     	redis server address (default "127.0.0.1:6379")
+  -watermark_low int
+    	list length watermark. (default 50000)
 ```
 
 -------------------------
