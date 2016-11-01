@@ -14,7 +14,7 @@ Commands:
 ---------------------
 
 ```
-Usage of ./guid:
+Usage of help:
 Commands:
    start       - start service
    import      - import id list to bloomfilter from a file
@@ -28,66 +28,69 @@ More: guid help <command>
 -------------------------
 
 ```
-./guid start <options>
-options:
-  -generate_number int
-    	id numbers per generate action. (default 10000)
-  -idlen uint
-    	id length. (default 20)
-  -index string
-    	bloomfilter index file (default "guid.idx")
-  -key string
-    	redis id-key (default "guid-20")
-  -password string
-    	redis password
-  -redis string
-    	redis server address (default "127.0.0.1:6379")
-  -watermark_low int
-    	list length watermark. (default 50000)
+Usage of help:
+Commands:
+   start       - start service
+   import      - import id list to bloomfilter from a file
+   top         - get top 10 id in redis
+   clear-redis - truncate id list in redis
+   has         - test id in bloomfilter
+
+More: guid help <command>
 ```
 
 -------------------------
 
 ```
-./guid import <options>
-options:
-  -file string
-    	file to import
-  -index string
-    	bloomfilter index file (default "guid.idx")
+Usage of help:
+Commands:
+   start       - start service
+   import      - import id list to bloomfilter from a file
+   top         - get top 10 id in redis
+   clear-redis - truncate id list in redis
+   has         - test id in bloomfilter
+
+More: guid help <command>
 ```
 
 -------------------------
 
 ```
-./guid top <options>
-options:
-  -key string
-    	redis id-key (default "guid-20")
-  -password string
-    	redis password
-  -redis string
-    	redis server address (default "127.0.0.1:6379")
+Usage of help:
+Commands:
+   start       - start service
+   import      - import id list to bloomfilter from a file
+   top         - get top 10 id in redis
+   clear-redis - truncate id list in redis
+   has         - test id in bloomfilter
+
+More: guid help <command>
 ```
 
 -------------------------
 
 ```
-./guid clear-redis <options>
-options:
-  -key string
-    	redis id-key (default "guid-20")
-  -password string
-    	redis password
-  -redis string
-    	redis server address (default "127.0.0.1:6379")
+Usage of help:
+Commands:
+   start       - start service
+   import      - import id list to bloomfilter from a file
+   top         - get top 10 id in redis
+   clear-redis - truncate id list in redis
+   has         - test id in bloomfilter
+
+More: guid help <command>
 ```
 
 -------------------------
 
 ```
-./guid has <options> <test>
-options:
-  -index string
-    	bloomfilter index file (default "guid.idx")
+Usage of help:
+Commands:
+   start       - start service
+   import      - import id list to bloomfilter from a file
+   top         - get top 10 id in redis
+   clear-redis - truncate id list in redis
+   has         - test id in bloomfilter
+
+More: guid help <command>
 ```
