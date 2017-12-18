@@ -58,7 +58,7 @@ func main() {
 	default:
 		topic := flag.Arg(1)
 		if topic != "" {
-			fmt.Fprintf(os.Stderr, "%s %s <options>%s\noptions:\n", os.Args[0], topic, ommand_arg_line_info(topic))
+			fmt.Fprintf(os.Stderr, "%s %s <options>%s\noptions:\n", os.Args[0], topic, command_arg_line_info(topic))
 			parse_arg(topic)
 			flag.PrintDefaults()
 		} else {
@@ -77,7 +77,7 @@ func main() {
 	}
 }
 
-func ommand_arg_line_info(command string) string {
+func command_arg_line_info(command string) string {
 	switch command {
 	case "has":
 		return " <test>"
