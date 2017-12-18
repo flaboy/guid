@@ -7,7 +7,7 @@ Install:
 ---------------------
 
 ```
-go install github.com/flaboy/guid
+go get github.com/flaboy/guid
 ```
 
 Commands:
