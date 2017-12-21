@@ -104,8 +104,8 @@ func watchloop() {
 			}
 		} else {
 			log.Println("redis-error:", llen.Err())
-			time.Sleep(time.Second * interval)
 		}
+		time.Sleep(time.Second * interval)
 	}
 }
 
