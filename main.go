@@ -1,45 +1,46 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
-	"encoding/json"
+	// "bufio"
+	// "bytes"
+	"container/list"
 	"flag"
 	"fmt"
-	"github.com/willf/bloom"
 	"gopkg.in/redis.v5"
-	"io/ioutil"
+	// "io/ioutil"
 	"log"
 	"math"
+	"math/rand"
 	"os"
 	"strconv"
 	"time"
 )
 
 var (
-	redis_server      *string
-	redis_password    *string
-	redis_key         *string
-	index_file        *string
-	idlen             *uint
-	import_file       *string
-	watermark_low     *int
-	generate_number   *int
-	redis_client      *redis.Client
-	bfilter           *bloom.BloomFilter
-	bfilter_header    *index_file_header
-	is_index_not_sync bool
+	redis_server    *string
+	redis_password  *string
+	redis_key       *string
+	idlen           *uint
+	watermark_low   *int
+	generate_number *int
+	redis_client    *redis.Client
+	jump_number     *int
+	command         string
+	rnd             *rand.Rand
+	step_id         int
 )
 
 const (
-	default_id_len = 20
-	interval       = 1 //redis监测间隔
-	generate_step  = 100
+	interval = 1
 )
 
 func main() {
-	command := os.Args[1]
-	os.Args = os.Args[1:]
+
+	if len(os.Args) > 1 {
+		command = os.Args[1]
+		os.Args = os.Args[1:]
+	}
+
 	parse_arg(command)
 	flag.Parse()
 
@@ -47,29 +48,18 @@ func main() {
 	case "start":
 		log.Printf("redis=%s, idlen=%d, key=\"%s\"\n", *redis_server, *idlen, *redis_key)
 		do_start_server()
-	case "import":
-		do_import()
 	case "top":
 		do_top()
 	case "clear-redis":
 		do_clear_redis()
-	case "has":
-		do_has()
 	default:
 		topic := flag.Arg(1)
 		if topic != "" {
-			fmt.Fprintf(os.Stderr, "%s %s <options>%s\noptions:\n", os.Args[0], topic, ommand_arg_line_info(topic))
+			fmt.Fprintf(os.Stderr, "%s %s <options>%s\noptions:\n", os.Args[0], topic, command_arg_line_info(topic))
 			parse_arg(topic)
 			flag.PrintDefaults()
 		} else {
-			fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-			fmt.Fprintln(os.Stderr, "Commands:")
-			fmt.Fprintln(os.Stderr, "   start       - start service")
-			fmt.Fprintln(os.Stderr, "   import      - import id list to bloomfilter from a file")
-			fmt.Fprintln(os.Stderr, "   top         - get top 10 id in redis")
-			fmt.Fprintln(os.Stderr, "   clear-redis - truncate id list in redis")
-			fmt.Fprintln(os.Stderr, "   has         - test id in bloomfilter")
-			fmt.Fprintln(os.Stderr, "\nMore: guid help <command>")
+			print_help()
 		}
 		if command != "help" {
 			os.Exit(1)
@@ -77,7 +67,16 @@ func main() {
 	}
 }
 
-func ommand_arg_line_info(command string) string {
+func print_help() {
+	fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+	fmt.Fprintln(os.Stderr, "Commands:")
+	fmt.Fprintln(os.Stderr, "   start       - start service")
+	fmt.Fprintln(os.Stderr, "   top         - get top 10 id in redis")
+	fmt.Fprintln(os.Stderr, "   clear-redis - truncate id list in redis")
+	fmt.Fprintln(os.Stderr, "\nMore: guid help <command>")
+}
+
+func command_arg_line_info(command string) string {
 	switch command {
 	case "has":
 		return " <test>"
@@ -100,13 +99,8 @@ func watchloop() {
 		llen := redis_client.LLen(*redis_key)
 		if llen.Err() == nil {
 			if int(llen.Val()) < *watermark_low {
-				log.Printf("count(\"%s\")=%d < %d, generate %d ids\n", *redis_key, llen.Val(), *watermark_low, *generate_number)
-				generate_id_list(*redis_key, *idlen, *generate_number)
-			} else {
-				if is_index_not_sync {
-					write_index_file()
-				}
-				time.Sleep(time.Second * interval)
+				log.Printf("count(\"%s\")=%d < %d, generate ids\n", *redis_key, llen.Val(), *watermark_low)
+				generate_id_list(*redis_key, *idlen)
 			}
 		} else {
 			log.Println("redis-error:", llen.Err())
@@ -115,154 +109,62 @@ func watchloop() {
 	}
 }
 
-func write_index_file() {
-	log.Println("writing " + *index_file + "...")
-	fd, err := os.OpenFile(*index_file+".tmp", os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		log.Println("write error", *index_file+".tmp", err)
-	}
-	defer fd.Close()
-	fd.Truncate(0)
-
-	buf, _ := json.Marshal(bfilter_header)
-	fd.Write(buf)
-
-	buf, err = bfilter.GobEncode()
-	if err != nil {
-		log.Println("encoding error", err)
-	}
-
-	fd.Seek(256, 0)
-	n, err := fd.Write(buf)
-
-	if err == nil {
-		fd.Sync()
-		defer func() {
-			os.Remove(*index_file)
-			os.Rename(*index_file+".tmp", *index_file)
-			is_index_not_sync = false
-			log.Println("writing done", n)
-		}()
-	} else {
-		log.Println("write error", *index_file, err)
-	}
-}
-
-type index_file_header struct {
-	FilterN uint
-	FilterK uint
-}
-
-func load_filter() (err error) {
-	fd, err := os.OpenFile(*index_file, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		log.Println(*index_file, err)
-		return err
-	}
-
-	defer fd.Close()
-
-	buf := make([]byte, 256)
-	n, err := fd.Read(buf)
-
-	if err == nil && n == 256 {
-		buf := buf[0:bytes.IndexByte(buf, '\x00')]
-		bfilter_header = &index_file_header{}
-		err = json.Unmarshal(buf, bfilter_header)
-	}
-
-	if err != nil {
-		log.Println("header decode error", err)
-		if idlen == nil || *idlen < 3 {
-			log.Fatal("error : idlen must more than 3 ")
-		}
-
-		max_items := 20 * math.Min(math.Pow(36, float64(*idlen)), 100000000) //100000000
-		bfilter_header = &index_file_header{
-			FilterN: uint(max_items),
-			FilterK: uint(10),
-		}
-	}
-
-	log.Printf("bfilter, n=%d, k=%d\n", bfilter_header.FilterN, bfilter_header.FilterK)
-	bfilter = bloom.New(bfilter_header.FilterN, bfilter_header.FilterK)
-
-	if err == nil {
-		buf, err = ioutil.ReadAll(fd)
-		err = bfilter.GobDecode(buf)
-		if err != nil {
-			log.Println("bfilter decode error", err)
-		}
-	} else {
-		log.Println("loading error", err)
-		log.Printf("creating bloomfilter index file - %s\n", *index_file)
-	}
-
-	return err
-}
-
-func generate_id_list(key string, idlen uint, number int) (err error) {
+func generate_id_list(key string, idlen uint) (err error) {
 
 	var (
-		cnt  = 0
-		step = generate_step
+		i      = int(math.Pow(10, float64(idlen-2)))
+		max    = int(math.Pow(10, float64(idlen-1)))
+		el     *list.Element
+		cnt    = 0
+		prefix = strconv.Itoa(step_id)
 	)
 
-	for cnt < number {
-		if step > (number - cnt) {
-			step = number - cnt
+	l := list.New()
+	mp := make([]*list.Element, max)
+
+	for i < max {
+		i += rnd.Intn(*jump_number)
+		if l.Len() == 0 {
+			el = l.PushFront(i)
+		} else {
+			el = l.InsertBefore(i, mp[rnd.Intn(cnt)])
 		}
-
-		ids := make([]interface{}, 0)
-		i := 0
-		for i < step {
-			new_id := generate_id(int(idlen))
-			if is_in_bloomfilter(new_id) == false {
-				ids = append(ids, new_id)
-				bfilter.AddString(new_id)
-				is_index_not_sync = true
-				i++
-			}
-		}
-
-		redis_client.RPush(key, ids...)
-
-		cnt += step
+		mp[cnt] = el
+		cnt += 1
 	}
 
+	el = l.Front()
+	for el != nil {
+		redis_client.RPush(key, prefix+strconv.Itoa(el.Value.(int)))
+		el = el.Next()
+	}
+	step_id += 1
 	return nil
 }
 
-func is_in_bloomfilter(test string) bool {
-	return bfilter.TestString(test)
-}
-
 func parse_arg(command string) {
+	idlen = flag.Uint("l", 7, "id length.")
+
+	if command == "start" {
+		watermark_low = flag.Int("m", 50000, "list length watermark.")
+		generate_number = flag.Int("n", 100000, "id numbers per generate action.")
+		jump_number = flag.Int("j", 10, "jump number")
+	}
+
 	switch command {
-	case "import", "has":
-		index_file = flag.String("i", "guid.idx", "bloomfilter index file")
 	case "top", "clear-redis", "start":
 		redis_server = flag.String("s", "127.0.0.1:6379", "redis server address")
 		redis_password = flag.String("p", "", "redis password")
-		redis_key = flag.String("k", "guid-"+strconv.Itoa(default_id_len), "redis id-key")
-	}
-
-	if command == "start" {
-		idlen = flag.Uint("l", default_id_len, "id length.")
-		index_file = flag.String("i", "guid.idx", "bloomfilter index file")
-
-		watermark_low = flag.Int("m", 50000, "list length watermark.")
-		generate_number = flag.Int("n", 10000, "id numbers per generate action.")
-	} else if command == "import" {
-		import_file = flag.String("f", "", "file to import")
+		redis_key = flag.String("k", "guid-"+strconv.Itoa(int(*idlen)), "redis id-key")
 	}
 }
 
 // command....
 
 func do_start_server() {
-	load_filter()
 	redis_conn()
+	step_id = 0
+	rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	_, err := redis_client.Ping().Result()
 	if err == nil {
@@ -286,36 +188,11 @@ func do_top() {
 	}
 }
 
-func do_import() {
-	load_filter()
-	fd, err := os.OpenFile(*import_file, os.O_RDONLY, 0644)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	rd := bufio.NewReader(fd)
-	var line []byte
-	for ; err == nil; line, _, err = rd.ReadLine() {
-		bfilter.Add(line)
-	}
-	write_index_file()
-}
-
 func do_clear_redis() {
 	redis_conn()
-	err := redis_client.LTrim(*redis_key, 0, 0).Err()
+	err := redis_client.Del(*redis_key).Err()
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
-	}
-}
-
-func do_has() {
-	load_filter()
-	word := flag.Arg(1)
-	if is_in_bloomfilter(word) {
-		fmt.Printf("%s is exists\n", word)
-	} else {
-		fmt.Printf("%s not found\n", word)
 	}
 }
