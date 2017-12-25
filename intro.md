@@ -3,6 +3,8 @@ Guid
 
 Generate uniq-id and RPUSH redis list.
 
+[Download](https://github.com/flaboy/guid/releases)
+
 Install:
 ---------------------
 
@@ -12,7 +14,6 @@ go get github.com/flaboy/guid
 
 Example:
 
-start service
 ```
 guid start guid-order
 017/12/25 18:09:17 redis=127.0.0.1:6379, idlen=6, key="guid-order"
