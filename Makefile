@@ -12,6 +12,9 @@ readme: ${OBJ}
 	@cat intro.md > README.md
 	@echo '```' >> README.md
 	@./${OBJ} help 2>> README.md
+	@echo '' >> README.md
+	@./${OBJ} help start 2>> README.md
+	@echo '```' >> README.md
 
 bin:
 	GOOS="windows" GOARCH="amd64" CGO_ENABLED="1" CC="x86_64-w64-mingw32-gcc" go build

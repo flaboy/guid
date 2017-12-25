@@ -1,13 +1,10 @@
 package main
 
 import (
-	// "bufio"
-	// "bytes"
 	"container/list"
 	"flag"
 	"fmt"
 	"gopkg.in/redis.v5"
-	// "io/ioutil"
 	"log"
 	"math"
 	"math/rand"
@@ -19,7 +16,7 @@ import (
 var (
 	redis_server    *string
 	redis_password  *string
-	redis_key       *string
+	redis_key       string
 	idlen           *uint
 	watermark_low   *int
 	generate_number *int
@@ -27,7 +24,8 @@ var (
 	jump_number     *int
 	command         string
 	rnd             *rand.Rand
-	step_id         int
+	step_id         int64
+	prefix          *string
 )
 
 const (
@@ -36,6 +34,7 @@ const (
 
 func main() {
 
+	prog_name := os.Args[0]
 	if len(os.Args) > 1 {
 		command = os.Args[1]
 		os.Args = os.Args[1:]
@@ -46,16 +45,19 @@ func main() {
 
 	switch command {
 	case "start":
-		log.Printf("redis=%s, idlen=%d, key=\"%s\"\n", *redis_server, *idlen, *redis_key)
+		get_redis_key(prog_name, command)
+		log.Printf("redis=%s, idlen=%d, key=\"%s\"\n", *redis_server, *idlen, redis_key)
 		do_start_server()
 	case "top":
+		get_redis_key(prog_name, command)
 		do_top()
 	case "clear-redis":
+		get_redis_key(prog_name, command)
 		do_clear_redis()
 	default:
-		topic := flag.Arg(1)
-		if topic != "" {
-			fmt.Fprintf(os.Stderr, "%s %s <options>%s\noptions:\n", os.Args[0], topic, command_arg_line_info(topic))
+		if len(os.Args) > 1 {
+			topic := os.Args[1]
+			fmt.Fprintf(os.Stderr, "%s %s <options>%s\noptions:\n", prog_name, topic, command_arg_line_info(topic))
 			parse_arg(topic)
 			flag.PrintDefaults()
 		} else {
@@ -64,6 +66,14 @@ func main() {
 		if command != "help" {
 			os.Exit(1)
 		}
+	}
+}
+
+func get_redis_key(prog_name, command string) {
+	redis_key = flag.Arg(0)
+	if redis_key == "" {
+		fmt.Fprintf(os.Stderr, "empty redis-key name, usage: %s %s <options> <redis-key>\n", prog_name, command)
+		os.Exit(1)
 	}
 }
 
@@ -80,11 +90,15 @@ func command_arg_line_info(command string) string {
 	switch command {
 	case "has":
 		return " <test>"
+	case "start":
+		return " <redis-key>"
+	case "top":
+		return " <redis-key>"
+	case "clear-redis":
+		return " <redis-key>"
 	}
 	return ""
 }
-
-// functions....
 
 func redis_conn() {
 	redis_client = redis.NewClient(&redis.Options{
@@ -96,11 +110,11 @@ func redis_conn() {
 
 func watchloop() {
 	for {
-		llen := redis_client.LLen(*redis_key)
+		llen := redis_client.LLen(redis_key)
 		if llen.Err() == nil {
 			if int(llen.Val()) < *watermark_low {
-				log.Printf("count(\"%s\")=%d < %d, generate ids\n", *redis_key, llen.Val(), *watermark_low)
-				generate_id_list(*redis_key, *idlen)
+				log.Printf("count(\"%s\")=%d < %d, generate ids\n", redis_key, llen.Val(), *watermark_low)
+				generate_id_list(redis_key, *idlen)
 			}
 		} else {
 			log.Println("redis-error:", llen.Err())
@@ -111,12 +125,14 @@ func watchloop() {
 
 func generate_id_list(key string, idlen uint) (err error) {
 
+	step_id = redis_client.Incr(key + "_step").Val()
+
 	var (
-		i      = int(math.Pow(10, float64(idlen-2)))
-		max    = int(math.Pow(10, float64(idlen-1)))
-		el     *list.Element
-		cnt    = 0
-		prefix = strconv.Itoa(step_id)
+		i          = int(math.Pow(10, float64(idlen-1)))
+		max        = int(math.Pow(10, float64(idlen)))
+		el         *list.Element
+		cnt        = 0
+		sub_prefix = strconv.FormatInt(step_id, 10)
 	)
 
 	l := list.New()
@@ -135,31 +151,27 @@ func generate_id_list(key string, idlen uint) (err error) {
 
 	el = l.Front()
 	for el != nil {
-		redis_client.RPush(key, prefix+strconv.Itoa(el.Value.(int)))
+		redis_client.RPush(key, *prefix+sub_prefix+strconv.Itoa(el.Value.(int)))
 		el = el.Next()
 	}
-	step_id += 1
 	return nil
 }
 
 func parse_arg(command string) {
-	idlen = flag.Uint("l", 7, "id length.")
 
 	if command == "start" {
 		watermark_low = flag.Int("m", 50000, "list length watermark.")
-		generate_number = flag.Int("n", 100000, "id numbers per generate action.")
 		jump_number = flag.Int("j", 10, "jump number")
+		idlen = flag.Uint("l", 6, "id length.")
+		prefix = flag.String("a", "", "prefix")
 	}
 
 	switch command {
 	case "top", "clear-redis", "start":
 		redis_server = flag.String("s", "127.0.0.1:6379", "redis server address")
 		redis_password = flag.String("p", "", "redis password")
-		redis_key = flag.String("k", "guid-"+strconv.Itoa(int(*idlen)), "redis id-key")
 	}
 }
-
-// command....
 
 func do_start_server() {
 	redis_conn()
@@ -168,7 +180,15 @@ func do_start_server() {
 
 	_, err := redis_client.Ping().Result()
 	if err == nil {
-		log.Printf("redis connected, starting watchloop for \"%s\"\n", *redis_key)
+		log.Printf("redis connected, starting watchloop for \"%s\"\n", redis_key)
+		step_id_str := redis_client.Get(redis_key + "_step").Val()
+		step_id, err := strconv.ParseInt(step_id_str, 10, 0)
+		if err != nil {
+			redis_client.Set(redis_key+"_step", 10000, 0)
+			log.Printf("set step=10000\n")
+		} else {
+			log.Printf("get step=%d\n", step_id)
+		}
 		watchloop()
 	} else {
 		log.Fatal("redis", err)
@@ -177,7 +197,7 @@ func do_start_server() {
 
 func do_top() {
 	redis_conn()
-	rst, err := redis_client.LRange(*redis_key, 0, 10).Result()
+	rst, err := redis_client.LRange(redis_key, 0, 10).Result()
 	if err == nil {
 		for _, id := range rst {
 			fmt.Println(id)
@@ -190,7 +210,7 @@ func do_top() {
 
 func do_clear_redis() {
 	redis_conn()
-	err := redis_client.Del(*redis_key).Err()
+	err := redis_client.Del(redis_key).Err()
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
